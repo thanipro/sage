@@ -20,7 +20,7 @@ cd sage
 cargo install --path .
 
 # Configure with your API key
-sage --provider openai --key your_api_key
+sage config -p openai -k your_api_key
 ```
 
 ## Usage
@@ -30,16 +30,16 @@ sage --provider openai --key your_api_key
 sage src/*.rs
 
 # Add message context to help the AI
-sage --context "Refactoring authentication flow" src/auth/
+sage -c "Refactoring authentication flow" src/auth/
 
 # Use already staged changes
 sage
 
 # Preview without committing
-sage --dry-run
+sage -d
 
 # Include unstaged changes in analysis
-sage --all
+sage -a
 
 # Provide your own message (skips AI)
 sage -m "fix: resolve login issue"
@@ -48,7 +48,46 @@ sage -m "fix: resolve login issue"
 sage --amend
 
 # Show diff before committing
-sage --show-diff
+sage -s
+
+# Commit and push in one step
+sage -p
+
+# Combine flags for powerful workflows
+sage -a -p -c "Fix authentication bugs"  # Stage all, add context, and push
+```
+
+## Shortcuts
+
+All commands use short flags for faster workflows:
+
+| Short Flag | Long Flag    | Description                     |
+|------------|-------------|---------------------------------|
+| `-a`       | `--all`     | Stage all changes              |
+| `-p`       | `--push`    | Push changes after commit      |
+| `-c`       | `--context` | Add context for AI             |
+| `-m`       | `--message` | Provide manual commit message  |
+| `-d`       | `--dry-run` | Preview without committing     |
+| `-s`       | `--show-diff` | Show changes before commit   |
+| `-v`       | `--verbose` | Show detailed progress         |
+
+## Configuration
+
+```bash
+# Set up API provider and key
+sage config -p openai -k your_api_key
+
+# Show current configuration
+sage config -s
+
+# Switch to a different provider
+sage use claude
+
+# Update key for a specific provider
+sage config --update-key openai -k new_api_key
+
+# Set preferred model for a provider
+sage config -p openai --model gpt-4-turbo
 ```
 
 ## Shell Integration
@@ -56,13 +95,17 @@ sage --show-diff
 Add this to your `.bashrc` or `.zshrc`:
 
 ```bash
-# Alias for completely replacing git commit
-alias git-commit='sage'
+# Quick sage shortcuts
+alias sg='sage'                    # Basic sage command
+alias sga='sage -a'                # Stage all changes
+alias sgp='sage -p'                # Commit and push
+alias sgap='sage -a -p'            # Stage all, commit and push
+alias sgm='sage -m'                # Commit with manual message
+alias sgd='sage -s'                # Show diff before committing
 
-# Function for committing all changes
-gca() {
-  sage --all "$@"
-}
+# Common workflows
+alias sgac='sage -a -c'            # Stage all with context
+alias sgapc='sage -a -p -c'        # Stage all, push with context
 ```
 
 ## How It Works
@@ -74,21 +117,9 @@ gca() {
 5. **Interactive confirmation** to commit, edit, or abort
 6. **Commit changes** with the generated message
 
-## Configuration
-
-Configuration is stored in `~/.sage-config.json`.
-
-```bash
-# Set up API provider and key
-sage --provider openai --key your_api_key
-```
-
 ## Requirements
 
 - Rust 1.65+
 - Git
 - OpenAI or Claude API key
 
-## License
-
-MIT

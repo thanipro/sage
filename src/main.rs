@@ -2,7 +2,7 @@ use std::error::Error;
 use std::process::{Command, exit, Stdio};
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
-use clap::{Parser, Args, Subcommand};
+use clap::{Parser, Args, Subcommand, ValueEnum};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -11,71 +11,174 @@ use tokio::runtime::Runtime;
 use colored::Colorize;
 use std::time::Instant;
 use std::collections::HashMap;
+use std::fmt;
 
 const CONFIG_FILE: &str = ".sage-config.json";
 const MAX_DIFF_SIZE: usize = 15000;
+const APP_VERSION: &str = "1.0.0";
+const APP_NAME: &str = "sage";
+
+#[derive(Debug, Clone)]
+struct SageError(String);
+
+impl fmt::Display for SageError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for SageError {}
+
+impl From<&str> for SageError {
+    fn from(error: &str) -> Self {
+        SageError(error.to_string())
+    }
+}
+
+impl From<String> for SageError {
+    fn from(error: String) -> Self {
+        SageError(error)
+    }
+}
+
+impl From<io::Error> for SageError {
+    fn from(error: io::Error) -> Self {
+        SageError(format!("IO error: {}", error))
+    }
+}
+
+impl From<reqwest::Error> for SageError {
+    fn from(error: reqwest::Error) -> Self {
+        SageError(format!("Network error: {}", error))
+    }
+}
+
+impl From<serde_json::Error> for SageError {
+    fn from(error: serde_json::Error) -> Self {
+        SageError(format!("JSON error: {}", error))
+    }
+}
+
+type Result<T> = std::result::Result<T, SageError>;
 
 #[derive(Parser)]
-#[command(name = "sage")]
+#[command(name = APP_NAME)]
 #[command(author = "Author")]
-#[command(version = "1.0.0")]
+#[command(version = APP_VERSION)]
 #[command(about = "AI-powered Git Commit Message generator", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// File patterns to add (e.g. '*.rs', 'src/', etc.)
     #[arg(name = "FILES")]
     files: Vec<String>,
 
+    /// Don't actually commit, just print the generated message
     #[arg(short, long)]
     dry_run: bool,
 
-     #[arg(short, long)]
+    /// Use all changes (staged + unstaged) for message generation
+    #[arg(short, long)]
     all: bool,
 
+    /// Commit message to use (skips AI generation)
     #[arg(short, long)]
     message: Option<String>,
 
+    /// Add additional context to help AI generate better messages
     #[arg(short, long)]
     context: Option<String>,
 
+    /// Show a diff of the changes before committing
     #[arg(short, long)]
     show_diff: bool,
 
+    /// Amend the previous commit
     #[arg(long)]
     amend: bool,
 
+    /// Be more verbose about what's happening
     #[arg(short, long)]
     verbose: bool,
 
+    /// Push changes after commit
     #[arg(short, long)]
     push: bool,
+
+    /// Force push when needed (with --push)
+    #[arg(short = 'f', long)]
+    force_push: bool,
+
+    /// Skip confirmation prompt (auto-accept commit message)
+    #[arg(short = 'y', long = "yes")]
+    yes: bool,
+
+    /// Style of commit message to generate
+    #[arg(short = 't', long, value_enum)]
+    style: Option<CommitStyle>,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum CommitStyle {
+    /// Standard conventional commits format
+    Standard,
+    /// More detailed multi-line commit message
+    Detailed,
+    /// Very short one-line commit message
+    Short,
+    /// Includes emojis in the commit message
+    Emoji,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Configure API settings
     Config(ConfigArgs),
+
+    /// Switch between configured providers
     Use {
+        /// Provider to switch to (e.g., "openai", "claude")
         provider: String,
+    },
+
+    /// Show git diff without committing
+    Diff {
+        /// Files to show diff for
+        #[arg(name = "FILES")]
+        files: Vec<String>,
+
+        /// Show unstaged changes
+        #[arg(short, long)]
+        all: bool,
     },
 }
 
 #[derive(Args, Debug)]
 struct ConfigArgs {
+    /// Set API provider (openai, claude, etc.)
     #[arg(short, long)]
     provider: Option<String>,
 
+    /// Set API key
     #[arg(short, long)]
     key: Option<String>,
 
+    /// Update API key for a specific provider
     #[arg(long)]
     update_key: Option<String>,
 
+    /// Show current configuration
     #[arg(short, long)]
     show: bool,
 
+    /// Set preferred model for the provider
     #[arg(long)]
     model: Option<String>,
+
+    /// Set maximum tokens for responses
+    #[arg(long)]
+    max_tokens: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -89,6 +192,7 @@ struct Config {
     active_provider: String,
     providers: HashMap<String, ProviderConfig>,
     max_tokens: Option<usize>,
+    default_style: Option<String>,
 }
 
 impl Default for Config {
@@ -100,12 +204,13 @@ impl Default for Config {
             active_provider: "openai".to_string(),
             providers,
             max_tokens: Some(300),
+            default_style: None,
         }
     }
 }
 
 impl Config {
-    fn get_active_provider_config(&self) -> Result<(&String, &ProviderConfig), Box<dyn Error>> {
+    fn get_active_provider_config(&self) -> Result<(&String, &ProviderConfig)> {
         let provider = &self.active_provider;
         let config = self.providers.get(provider)
             .ok_or_else(|| format!("No configuration found for provider: {}", provider))?;
@@ -117,7 +222,7 @@ impl Config {
         Ok((provider, config))
     }
 
-    fn set_provider(&mut self, provider: &str, api_key: Option<String>, model: Option<String>) -> Result<(), Box<dyn Error>> {
+    fn set_provider(&mut self, provider: &str, api_key: Option<String>, model: Option<String>) -> Result<()> {
         let config = self.providers.entry(provider.to_string())
             .or_insert_with(ProviderConfig::default);
 
@@ -133,11 +238,22 @@ impl Config {
         Ok(())
     }
 
-    fn update_key(&mut self, provider: &str, api_key: &str) -> Result<(), Box<dyn Error>> {
+    fn update_key(&mut self, provider: &str, api_key: &str) -> Result<()> {
         let config = self.providers.entry(provider.to_string())
             .or_insert_with(ProviderConfig::default);
 
         config.api_key = api_key.to_string();
+        Ok(())
+    }
+
+    #[warn(dead_code)]
+    fn set_default_style(&mut self, style: Option<&CommitStyle>) -> Result<()> {
+        self.default_style = style.map(|s| format!("{:?}", s).to_lowercase());
+        Ok(())
+    }
+
+    fn set_max_tokens(&mut self, tokens: usize) -> Result<()> {
+        self.max_tokens = Some(tokens);
         Ok(())
     }
 }
@@ -199,13 +315,47 @@ struct ClaudeResponseContent {
     text: String,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+/// Command execution context
+struct Context {
+    runtime: Runtime,
+    verbose: bool,
+}
+
+impl Context {
+    fn new(verbose: bool) -> Result<Self> {
+        let runtime = Runtime::new().map_err(|e| format!("Failed to initialize async runtime: {}", e))?;
+        Ok(Context { runtime, verbose })
+    }
+
+    fn log(&self, message: &str) {
+        if self.verbose {
+            println!("{}", message.blue());
+        }
+    }
+
+    #[warn(dead_code)]
+    fn log_always(&self, message: &str) {
+        println!("{}", message);
+    }
+
+    fn run_async<F, T>(&self, future: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.runtime.block_on(future)
+    }
+}
+
+fn main() -> std::result::Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
+    // Check if we're in a git repository first
     if !is_git_repo() {
         eprintln!("{}", "Error: Not in a git repository".red());
         exit(1);
     }
+
+    let context = Context::new(cli.verbose)?;
 
     match &cli.command {
         Some(Commands::Config(args)) => {
@@ -214,10 +364,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Commands::Use { provider }) => {
             use_provider(provider)?;
         },
+        Some(Commands::Diff { files, all }) => {
+            show_diff_command(files, *all)?;
+        },
         None => {
-            let rt = Runtime::new()?;
-            rt.block_on(async {
-                run_commit_flow(&cli).await
+            context.run_async(async {
+                run_commit_flow(&context, &cli).await
             })?;
         }
     }
@@ -225,7 +377,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_config_command(args: &ConfigArgs) -> Result<(), Box<dyn Error>> {
+fn handle_config_command(args: &ConfigArgs) -> Result<()> {
     let config_path = get_config_path()?;
     let mut config = load_config(&config_path)?;
 
@@ -264,6 +416,10 @@ fn handle_config_command(args: &ConfigArgs) -> Result<(), Box<dyn Error>> {
         config.set_provider(&provider_name, None, Some(model.clone()))?;
         println!("{}", format!("Model updated for provider: {}", provider_name).green());
         updated = true;
+    } else if let Some(tokens) = args.max_tokens {
+        config.set_max_tokens(tokens)?;
+        println!("{}", format!("Max tokens set to: {}", tokens).green());
+        updated = true;
     }
 
     if updated {
@@ -276,7 +432,7 @@ fn handle_config_command(args: &ConfigArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn use_provider(provider: &str) -> Result<(), Box<dyn Error>> {
+fn use_provider(provider: &str) -> Result<()> {
     let config_path = get_config_path()?;
     let mut config = load_config(&config_path)?;
 
@@ -289,6 +445,22 @@ fn use_provider(provider: &str) -> Result<(), Box<dyn Error>> {
 
     println!("{}", format!("Switched to provider: {}", provider).green());
     Ok(())
+}
+
+fn show_diff_command(files: &[String], all: bool) -> Result<()> {
+    if !files.is_empty() {
+        stage_files(files)?;
+    }
+
+    let diff = get_diff(all)?;
+    let files_changed = get_files_changed(all)?;
+
+    if diff.trim().is_empty() {
+        println!("{}", "No changes to display.".yellow());
+        return Ok(());
+    }
+
+    show_changes(&diff, &files_changed)
 }
 
 fn show_config(config: &Config) {
@@ -314,15 +486,19 @@ fn show_config(config: &Config) {
         }
     }
 
-    println!("\n  Max tokens: {}", config.max_tokens.unwrap_or(300));
+    if let Some(style) = &config.default_style {
+        println!("\n  Default commit style: {}", style);
+    }
+
+    println!("  Max tokens: {}", config.max_tokens.unwrap_or(300));
 }
 
-fn get_config_path() -> Result<String, Box<dyn Error>> {
-    let home_dir = env::var("HOME").map_err(|_| "Could not find home directory")?;
+fn get_config_path() -> Result<String> {
+    let home_dir = env::var("HOME").map_err(|_| SageError("Could not find home directory".into()))?;
     Ok(Path::new(&home_dir).join(CONFIG_FILE).to_string_lossy().to_string())
 }
 
-fn load_config(config_path: &str) -> Result<Config, Box<dyn Error>> {
+fn load_config(config_path: &str) -> Result<Config> {
     let path = Path::new(config_path);
     if !path.exists() {
         return Ok(Config::default());
@@ -334,13 +510,13 @@ fn load_config(config_path: &str) -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-fn save_config(config: &Config, config_path: &str) -> Result<(), Box<dyn Error>> {
+fn save_config(config: &Config, config_path: &str) -> Result<()> {
     let config_json = serde_json::to_string_pretty(config)?;
     fs::write(config_path, config_json)?;
     Ok(())
 }
 
-fn get_diff(all: bool) -> Result<String, Box<dyn Error>> {
+fn get_diff(all: bool) -> Result<String> {
     let args = if all {
         vec!["diff"]
     } else {
@@ -358,7 +534,7 @@ fn get_diff(all: bool) -> Result<String, Box<dyn Error>> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn get_files_changed(all: bool) -> Result<String, Box<dyn Error>> {
+fn get_files_changed(all: bool) -> Result<String> {
     let args = if all {
         vec!["status", "--porcelain"]
     } else {
@@ -376,7 +552,7 @@ fn get_files_changed(all: bool) -> Result<String, Box<dyn Error>> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn stage_files(files: &[String]) -> Result<(), Box<dyn Error>> {
+fn stage_files(files: &[String]) -> Result<()> {
     if files.is_empty() {
         return Ok(());
     }
@@ -397,7 +573,7 @@ fn stage_files(files: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn stage_all_files() -> Result<(), Box<dyn Error>> {
+fn stage_all_files() -> Result<()> {
     let status = Command::new("git")
         .args(["add", "--all"])
         .status()?;
@@ -409,7 +585,7 @@ fn stage_all_files() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn has_staged_changes() -> Result<bool, Box<dyn Error>> {
+fn has_staged_changes() -> Result<bool> {
     let output = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .status()?;
@@ -417,7 +593,7 @@ fn has_staged_changes() -> Result<bool, Box<dyn Error>> {
     Ok(!output.success())
 }
 
-fn commit_changes(message: &str, amend: bool) -> Result<(), Box<dyn Error>> {
+fn commit_changes(message: &str, amend: bool) -> Result<()> {
     let mut args = vec!["commit", "-m", message];
 
     if amend {
@@ -435,11 +611,16 @@ fn commit_changes(message: &str, amend: bool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn push_changes() -> Result<(), Box<dyn Error>> {
+fn push_changes(force: bool) -> Result<()> {
     println!("{}", "Pushing changes...".blue());
 
+    let mut args = vec!["push"];
+    if force {
+        args.push("--force");
+    }
+
     let status = Command::new("git")
-        .args(["push"])
+        .args(args)
         .status()?;
 
     if !status.success() {
@@ -450,28 +631,31 @@ fn push_changes() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_commit_flow(cli: &Cli) -> Result<(), Box<dyn Error>> {
+async fn run_commit_flow(context: &Context, cli: &Cli) -> Result<()> {
+    // Handle staged/unstaged files
+    let staged_initially = has_staged_changes()?;
+
     if cli.all || !cli.files.is_empty() {
         if cli.all {
-            if cli.verbose {
-                println!("{}", "Staging all changes...".blue());
-            }
+            context.log("Staging all changes...");
             stage_all_files()?;
-        }
-
-        else if !cli.files.is_empty() {
-            if cli.verbose {
-                println!("{}", format!("Staging specified files: {:?}...", cli.files).blue());
-            }
+        } else if !cli.files.is_empty() {
+            context.log(&format!("Staging specified files: {:?}...", cli.files));
             stage_files(&cli.files)?;
         }
     }
 
+    // Check if there are staged changes now
     if !has_staged_changes()? {
-        println!("{}", "No staged changes found. Nothing to commit.".yellow());
-        return Ok(());
+        if staged_initially || !cli.files.is_empty() || cli.all {
+            return Err("No staged changes found. Nothing to commit.".into());
+        } else {
+            // Only show this more detailed message when they haven't tried to stage anything
+            return Err("No staged changes found. Use --all to include unstaged changes or specify files to stage.".into());
+        }
     }
 
+    // If manual message is provided, use it directly
     if let Some(message) = &cli.message {
         if cli.dry_run {
             println!("{}", "Would commit with message:".blue());
@@ -481,24 +665,21 @@ async fn run_commit_flow(cli: &Cli) -> Result<(), Box<dyn Error>> {
             println!("{}", "Changes committed successfully!".green());
 
             if cli.push {
-                push_changes()?;
+                push_changes(cli.force_push)?;
             }
         }
-
         return Ok(());
     }
 
-    if cli.verbose {
-        println!("{}", "Analyzing git repository changes...".blue());
-    }
+    // Get git changes for AI analysis
+    context.log("Analyzing git repository changes...");
 
     let start = Instant::now();
     let diff = get_diff(false)?;
     let files_changed = get_files_changed(false)?;
 
     if diff.trim().is_empty() {
-        println!("{}", "No changes detected. Nothing to commit.".yellow());
-        return Ok(());
+        return Err("No changes detected. Nothing to commit.".into());
     }
 
     if cli.show_diff {
@@ -507,44 +688,52 @@ async fn run_commit_flow(cli: &Cli) -> Result<(), Box<dyn Error>> {
 
     let truncated_diff = smart_truncate_diff(&diff);
 
+    // Generate prompt for AI
     let context_str = cli.context.as_deref().unwrap_or("");
+
+    // Get commit style instructions based on CLI option or config
+    let style_instructions = get_style_instructions(cli.style)?;
+
     let prompt = format!(
         "Generate a concise and descriptive git commit message for the following changes.\n\
         Follow the conventional commits format (type: description).\n\
+        {}\n\
         Additional context: {}\n\
         Files changed:\n{}\n\nDiff:\n{}",
-        context_str, files_changed, truncated_diff
+        style_instructions, context_str, files_changed, truncated_diff
     );
 
-    if cli.verbose {
-        println!("{}", "Generating commit message using AI...".blue());
-    } else {
-        println!("{}", "Analyzing changes...".blue());
-    }
+    context.log("Generating commit message using AI...");
 
+    // Call the AI service
     let config_path = get_config_path()?;
     let config = load_config(&config_path)?;
     let message = call_ai(&config, &prompt).await?;
 
+    // Show timing information if verbose
     let elapsed = start.elapsed();
-    if cli.verbose {
-        println!("{}", format!("Generation took {:.2}s", elapsed.as_secs_f32()).blue());
-    }
+    context.log(&format!("Generation took {:.2}s", elapsed.as_secs_f32()));
 
     println!("\n{}", "Generated commit message:".green().bold());
     println!("{}", message);
 
+
     if cli.dry_run {
         println!("\n{}", "Dry run - changes were not committed.".yellow());
     } else {
-        let should_commit = confirm_commit()?;
+        // Skip confirmation if --yes flag is used
+        let should_commit = if cli.yes {
+            true
+        } else {
+            confirm_commit()?
+        };
 
         if should_commit {
             commit_changes(&message, cli.amend)?;
             println!("{}", "Changes committed successfully!".green());
 
             if cli.push {
-                push_changes()?;
+                push_changes(cli.force_push)?;
             }
         } else {
             println!("{}", "Commit aborted.".yellow());
@@ -554,7 +743,27 @@ async fn run_commit_flow(cli: &Cli) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn show_changes(diff: &str, files_changed: &str) -> Result<(), Box<dyn Error>> {
+fn get_style_instructions(style: Option<CommitStyle>) -> Result<String> {
+    match style {
+        Some(CommitStyle::Standard) => {
+            Ok("Use standard conventional commits format: 'type(scope): description'".to_string())
+        },
+        Some(CommitStyle::Detailed) => {
+            Ok("Create a detailed multi-line commit message with a summary line followed by empty line and bullet points explaining the changes".to_string())
+        },
+        Some(CommitStyle::Short) => {
+            Ok("Create an extremely concise one-line commit message".to_string())
+        },
+        Some(CommitStyle::Emoji) => {
+            Ok("Include appropriate emojis in the commit message".to_string())
+        },
+        None => {
+            Ok("Use standard conventional commits format: 'type(scope): description'".to_string())
+        }
+    }
+}
+
+fn show_changes(diff: &str, files_changed: &str) -> Result<()> {
     println!("{}", "Changes to be committed:".blue().bold());
     println!("{}", files_changed);
     println!("\n{}", "Diff:".blue().bold());
@@ -572,7 +781,7 @@ fn show_changes(diff: &str, files_changed: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn confirm_commit() -> Result<bool, Box<dyn Error>> {
+fn confirm_commit() -> Result<bool> {
     print!("\nCommit with this message? [Y/n/e for edit] ");
     io::stdout().flush()?;
 
@@ -581,7 +790,6 @@ fn confirm_commit() -> Result<bool, Box<dyn Error>> {
     let input = input.trim().to_lowercase();
 
     if input == "e" {
-
         let temp_file = "/tmp/sage_commit_msg";
         fs::write(temp_file, "")?;
 
@@ -614,8 +822,10 @@ fn smart_truncate_diff(diff: &str) -> String {
 
         important_parts.push_str("diff --git");
         for i in 0..header_lines {
-            important_parts.push_str(chunk_lines[i]);
-            important_parts.push('\n');
+            if i < chunk_lines.len() {
+                important_parts.push_str(chunk_lines[i]);
+                important_parts.push('\n');
+            }
         }
 
         if chunk_lines.len() > 20 {
@@ -639,8 +849,7 @@ fn smart_truncate_diff(diff: &str) -> String {
     }
 }
 
-
-async fn call_ai(config: &Config, prompt: &str) -> Result<String, Box<dyn Error>> {
+async fn call_ai(config: &Config, prompt: &str) -> Result<String> {
     let (provider_name, provider_config) = config.get_active_provider_config()?;
 
     match provider_name.as_str() {
@@ -650,7 +859,7 @@ async fn call_ai(config: &Config, prompt: &str) -> Result<String, Box<dyn Error>
     }
 }
 
-async fn call_openai_api(provider_config: &ProviderConfig, prompt: &str, max_tokens: Option<usize>) -> Result<String, Box<dyn Error>> {
+async fn call_openai_api(provider_config: &ProviderConfig, prompt: &str, max_tokens: Option<usize>) -> Result<String> {
     let client = Client::new();
 
     let model = provider_config.model.clone().unwrap_or_else(|| "gpt-4-turbo".to_string());
@@ -691,7 +900,7 @@ async fn call_openai_api(provider_config: &ProviderConfig, prompt: &str, max_tok
     }
 }
 
-async fn call_claude_api(provider_config: &ProviderConfig, prompt: &str, max_tokens: Option<usize>) -> Result<String, Box<dyn Error>> {
+async fn call_claude_api(provider_config: &ProviderConfig, prompt: &str, max_tokens: Option<usize>) -> Result<String> {
     let client = Client::new();
 
     let model = provider_config.model.clone().unwrap_or_else(|| "claude-3-sonnet-20240229".to_string());
