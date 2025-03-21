@@ -12,6 +12,7 @@ use colored::Colorize;
 use std::time::Instant;
 use std::collections::HashMap;
 use std::fmt;
+use regex::Regex;
 
 const CONFIG_FILE: &str = ".sage-config.json";
 const MAX_DIFF_SIZE: usize = 15000;
@@ -246,7 +247,7 @@ impl Config {
         Ok(())
     }
 
-    #[warn(dead_code)]
+    #[allow(dead_code)]
     fn set_default_style(&mut self, style: Option<&CommitStyle>) -> Result<()> {
         self.default_style = style.map(|s| format!("{:?}", s).to_lowercase());
         Ok(())
@@ -333,7 +334,7 @@ impl Context {
         }
     }
 
-    #[warn(dead_code)]
+    #[allow(dead_code)]
     fn log_always(&self, message: &str) {
         println!("{}", message);
     }
@@ -715,7 +716,7 @@ async fn run_commit_flow(context: &Context, cli: &Cli) -> Result<()> {
     context.log(&format!("Generation took {:.2}s", elapsed.as_secs_f32()));
 
     println!("\n{}", "Generated commit message:".green().bold());
-    println!("{}", message);
+    println!("{}", sanitize_commit_message(&message));
 
 
     if cli.dry_run {
@@ -894,10 +895,22 @@ async fn call_openai_api(provider_config: &ProviderConfig, prompt: &str, max_tok
 
     let response_data: OpenAIResponse = response.json().await?;
     if let Some(choice) = response_data.choices.first() {
-        Ok(choice.message.content.trim().to_string())
+        let message = choice.message.content.trim().to_string();
+        Ok(sanitize_commit_message(&message))
     } else {
         Err("No response from OpenAI API".into())
     }
+}
+
+fn sanitize_commit_message(message: &str) -> String {
+    let re = Regex::new(r"```\w*\s*([\s\S]*?)\s*```").unwrap();
+    if let Some(captures) = re.captures(message) {
+        if let Some(inner_text) = captures.get(1) {
+            return inner_text.as_str().trim().to_string();
+        }
+    }
+
+    message.trim().to_string()
 }
 
 async fn call_claude_api(provider_config: &ProviderConfig, prompt: &str, max_tokens: Option<usize>) -> Result<String> {
