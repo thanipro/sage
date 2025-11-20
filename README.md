@@ -28,7 +28,20 @@ sage is a command-line tool that integrates with your Git workflow to automatica
 
 ## Installation
 
-### Fresh Installation
+### One-Line Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanipro/sage/main/install.sh | bash
+```
+
+This will:
+1. Clone the repository to `~/.local/sage`
+2. Build the release binary
+3. Install to `~/.cargo/bin` (or `/usr/local/bin` or `~/.local/bin`)
+4. Auto-detect your shell and install completions (bash/zsh/fish)
+5. Prompt you to configure your API key interactively
+
+### Alternative: Clone and Install
 
 ```bash
 git clone https://github.com/thanipro/sage.git
@@ -36,32 +49,35 @@ cd sage
 ./install.sh
 ```
 
-The install script will:
-1. Build the release binary
-2. Install to `~/.cargo/bin`, `/usr/local/bin`, or `~/.local/bin`
-3. Make the binary executable
-4. Check if the install location is in your PATH
-
 ### Upgrading from Previous Version
 
-If you already have sage installed:
+The install script handles both fresh installs and upgrades. Simply run it again:
 
 ```bash
-cd sage
+curl -fsSL https://raw.githubusercontent.com/thanipro/sage/main/install.sh | bash
+```
+
+Or if you cloned the repository:
+
+```bash
+cd ~/.local/sage  # or wherever you cloned it
+./install.sh
+```
+
+To manually upgrade:
+
+```bash
+cd ~/.local/sage
 git pull
 cargo build --release
-cp target/release/sage ~/.cargo/bin/  # or wherever your current sage is installed
+cp target/release/sage ~/.cargo/bin/  # or: $(which sage | xargs dirname)
 ```
 
-To find where your current sage is installed:
+### Manual Installation with Cargo
 
 ```bash
-which sage
-```
-
-### Manual Installation
-
-```bash
+git clone https://github.com/thanipro/sage.git
+cd sage
 cargo install --path .
 ```
 
