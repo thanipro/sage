@@ -21,6 +21,17 @@ pub struct Config {
     pub providers: HashMap<String, ProviderConfig>,
     pub max_tokens: Option<usize>,
     pub default_style: Option<String>,
+    #[serde(default)]
+    pub preferences: Preferences,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Preferences {
+    pub auto_push: Option<bool>,
+    pub auto_stage_all: Option<bool>,
+    pub show_diff: Option<bool>,
+    pub skip_confirmation: Option<bool>,
+    pub verbose: Option<bool>,
 }
 
 impl Default for Config {
@@ -33,6 +44,7 @@ impl Default for Config {
             providers,
             max_tokens: Some(300),
             default_style: None,
+            preferences: Preferences::default(),
         }
     }
 }
@@ -83,6 +95,30 @@ impl Config {
         Ok(())
     }
 
+    pub fn set_preference(&mut self, key: &str, value: bool) -> Result<()> {
+        match key {
+            "auto_push" => self.preferences.auto_push = Some(value),
+            "auto_stage_all" => self.preferences.auto_stage_all = Some(value),
+            "show_diff" => self.preferences.show_diff = Some(value),
+            "skip_confirmation" => self.preferences.skip_confirmation = Some(value),
+            "verbose" => self.preferences.verbose = Some(value),
+            _ => return Err(SageError::InvalidInput(format!("Unknown preference: {}", key))),
+        }
+        Ok(())
+    }
+
+    pub fn set_default_style(&mut self, style: &str) -> Result<()> {
+        match style {
+            "standard" | "detailed" | "short" => {
+                self.default_style = Some(style.to_string());
+                Ok(())
+            }
+            _ => Err(SageError::InvalidInput(
+                format!("Invalid style: {}. Use: standard, detailed, or short", style)
+            )),
+        }
+    }
+
     pub fn show(&self) {
         println!("Current configuration:");
         println!("  Active provider: {}", self.active_provider);
@@ -111,6 +147,21 @@ impl Config {
         }
 
         println!("  Max tokens: {}", self.max_tokens.unwrap_or(300));
+
+        println!("\nPreferences:");
+        println!("  Auto push: {}", format_bool_pref(self.preferences.auto_push));
+        println!("  Auto stage all: {}", format_bool_pref(self.preferences.auto_stage_all));
+        println!("  Show diff: {}", format_bool_pref(self.preferences.show_diff));
+        println!("  Skip confirmation: {}", format_bool_pref(self.preferences.skip_confirmation));
+        println!("  Verbose: {}", format_bool_pref(self.preferences.verbose));
+    }
+}
+
+fn format_bool_pref(value: Option<bool>) -> String {
+    match value {
+        Some(true) => "enabled".green().to_string(),
+        Some(false) => "disabled".red().to_string(),
+        None => "not set".yellow().to_string(),
     }
 }
 

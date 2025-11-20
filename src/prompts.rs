@@ -65,10 +65,19 @@ pub fn get_style_instructions(style: Option<CommitStyle>) -> &'static str {
              Common types: feat, fix, docs, style, refactor, test, chore"
         },
         Some(CommitStyle::Detailed) => {
-            "Create a detailed multi-line commit message:\n\
-             - First line: Short summary (type: description)\n\
-             - Blank line\n\
-             - Body: Bullet points explaining the changes"
+            "Create a detailed multi-line commit message following Git convention:\n\
+             - First line: Short summary in conventional commits format (max 50 chars)\n\
+             - Second line: MUST be blank\n\
+             - Following lines: Detailed explanation of what changed and why\n\
+             - Use bullet points with '- ' for listing changes\n\
+             - Wrap lines at 72 characters\n\
+             \n\
+             Example format:\n\
+             feat(auth): add JWT token validation\n\
+             \n\
+             - Implement token verification middleware\n\
+             - Add expiration checking\n\
+             - Handle refresh token logic"
         },
         Some(CommitStyle::Short) => {
             "Create an extremely concise one-line commit message.\n\

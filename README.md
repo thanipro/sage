@@ -267,25 +267,45 @@ After generating completions, restart your shell or source the completion file.
 
 ### Commit Message Styles
 
-Use the `-t` or `--style` flag to control message format:
+Use the `-t` or `--style` flag to control message format, or set a default in preferences:
 
 ```bash
 # Standard conventional commits (default)
 sage -t standard
-# Output: feat(auth): add user authentication
+```
+**Output:** `feat(auth): add user authentication`
 
-# Detailed multi-line messages
+Single line following conventional commits format.
+
+```bash
+# Detailed multi-line messages (Git convention)
 sage -t detailed
-# Output:
-# feat: add user authentication
-#
-# - Implement JWT token validation
-# - Add login endpoint
-# - Create user session management
+```
+**Output:**
+```
+feat(auth): add user authentication
 
+- Implement JWT token validation
+- Add login endpoint
+- Create user session management
+- Handle token expiration
+```
+
+Follows proper Git convention: short summary line (max 50 chars), blank line, then detailed body. GitHub shows the first line in commit lists, full message when clicked.
+
+```bash
 # Short one-line messages (max 50 chars)
 sage -t short
-# Output: add user auth
+```
+**Output:** `add user auth`
+
+Ultra-concise for small changes.
+
+**Set a default style:**
+```bash
+sage config --wizard  # Select option 1
+# or
+sage config --set-pref default-style --value detailed
 ```
 
 ## Configuration

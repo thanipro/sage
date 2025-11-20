@@ -151,4 +151,16 @@ pub struct ConfigArgs {
     /// Set maximum tokens for responses
     #[arg(long)]
     pub max_tokens: Option<usize>,
+
+    /// Launch interactive configuration wizard
+    #[arg(short, long)]
+    pub wizard: bool,
+
+    /// Set preference: auto-push, auto-stage-all, show-diff, skip-confirmation, verbose
+    #[arg(long)]
+    pub set_pref: Option<String>,
+
+    /// Value for preference (true/false)
+    #[arg(long)]
+    pub value: Option<bool>,
 }

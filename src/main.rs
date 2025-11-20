@@ -75,6 +75,12 @@ fn handle_config_command(args: &ConfigArgs) -> Result<()> {
     let config_path = get_config_path()?;
     let mut config = load_config(&config_path)?;
 
+    if args.wizard {
+        run_config_wizard(&mut config)?;
+        save_config(&config, &config_path)?;
+        return Ok(());
+    }
+
     if args.show {
         config.show();
         return Ok(());
@@ -114,6 +120,15 @@ fn handle_config_command(args: &ConfigArgs) -> Result<()> {
         config.set_max_tokens(tokens)?;
         println!("{}", format!("Max tokens set to: {}", tokens).green());
         updated = true;
+    } else if let Some(pref_key) = &args.set_pref {
+        if let Some(value) = args.value {
+            let normalized_key = pref_key.replace("-", "_");
+            config.set_preference(&normalized_key, value)?;
+            println!("{}", format!("Preference '{}' set to: {}", pref_key, value).green());
+            updated = true;
+        } else {
+            return Err(SageError::InvalidInput("--value required with --set-pref".to_string()));
+        }
     }
 
     if updated {
@@ -160,14 +175,23 @@ fn show_diff_command(files: &[String], all: bool) -> Result<()> {
 }
 
 async fn run_commit_flow(cli: &Cli) -> Result<()> {
-    if cli.all || !cli.files.is_empty() {
-        if cli.all {
-            if cli.verbose {
+    let config_path = get_config_path()?;
+    let config = load_config(&config_path)?;
+
+    let should_stage_all = cli.all || config.preferences.auto_stage_all.unwrap_or(false);
+    let should_show_diff = cli.show_diff || config.preferences.show_diff.unwrap_or(false);
+    let should_skip_confirm = cli.yes || config.preferences.skip_confirmation.unwrap_or(false);
+    let is_verbose = cli.verbose || config.preferences.verbose.unwrap_or(false);
+    let should_push = cli.push || config.preferences.auto_push.unwrap_or(false);
+
+    if should_stage_all || !cli.files.is_empty() {
+        if should_stage_all {
+            if is_verbose {
                 println!("{}", "Staging all changes...".blue());
             }
             stage_all_files()?;
         } else if !cli.files.is_empty() {
-            if cli.verbose {
+            if is_verbose {
                 println!("{}", format!("Staging specified files: {:?}...", cli.files).blue());
             }
             stage_files(&cli.files)?;
@@ -186,14 +210,14 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
             commit_changes(message, cli.amend)?;
             println!("{}", "Changes committed successfully!".green());
 
-            if cli.push {
+            if should_push {
                 push_changes(cli.force_push)?;
             }
         }
         return Ok(());
     }
 
-    if cli.verbose {
+    if is_verbose {
         println!("{}", "Analyzing git repository changes...".blue());
     }
 
@@ -205,15 +229,24 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
         return Err(SageError::GitNoChanges);
     }
 
-    if cli.show_diff {
+    if should_show_diff {
         show_changes(&diff, &files_changed)?;
     }
 
     let truncated_diff = smart_truncate_diff(&diff);
 
     let context_str = cli.context.as_deref().unwrap_or("");
+    let commit_style = cli.style.or_else(|| {
+        config.default_style.as_ref().and_then(|s| match s.as_str() {
+            "standard" => Some(cli::CommitStyle::Standard),
+            "detailed" => Some(cli::CommitStyle::Detailed),
+            "short" => Some(cli::CommitStyle::Short),
+            _ => None,
+        })
+    });
+
     let prompt = prompts::build_commit_prompt(
-        cli.style,
+        commit_style,
         context_str,
         &files_changed,
         &truncated_diff,
@@ -228,13 +261,11 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
     spinner.set_message("Generating commit message using AI...");
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let config_path = get_config_path()?;
-    let config = load_config(&config_path)?;
     let response = call_ai(&config, &prompt).await?;
 
     spinner.finish_and_clear();
 
-    if cli.verbose {
+    if is_verbose {
         let elapsed = start.elapsed();
         println!("{}", format!("Generation took {:.2}s", elapsed.as_secs_f32()).blue());
     }
@@ -242,8 +273,7 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
     println!("\n{}", "Generated commit message:".green().bold());
     println!("{}", response.message);
 
-    // Show token usage
-    if cli.verbose {
+    if is_verbose {
         println!("\n{}", format!("Tokens: {} in / {} out / {} total",
             response.usage.input_tokens,
             response.usage.output_tokens,
@@ -255,7 +285,7 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
     if cli.dry_run {
         println!("\n{}", "Dry run - changes were not committed.".yellow());
     } else {
-        let (should_commit, final_message) = if cli.yes {
+        let (should_commit, final_message) = if should_skip_confirm {
             (true, response.message.clone())
         } else {
             confirm_commit(&response.message)?
@@ -265,7 +295,7 @@ async fn run_commit_flow(cli: &Cli) -> Result<()> {
             commit_changes(&final_message, cli.amend)?;
             println!("{}", "Changes committed successfully!".green());
 
-            if cli.push {
+            if should_push {
                 push_changes(cli.force_push)?;
             }
         } else {
@@ -367,6 +397,124 @@ async fn run_branch_flow(
     } else {
         println!("{}", "Branch creation aborted.".yellow());
     }
+
+    Ok(())
+}
+
+fn run_config_wizard(config: &mut config::Config) -> Result<()> {
+    println!("{}", "Configuration Wizard".blue().bold());
+    println!("");
+
+    println!("Current Settings:");
+    config.show();
+    println!("");
+
+    println!("{}", "Select what you'd like to configure:".blue());
+    println!("  1) Default commit style");
+    println!("  2) Auto-push after commit");
+    println!("  3) Auto-stage all changes");
+    println!("  4) Show diff by default");
+    println!("  5) Skip confirmation prompts");
+    println!("  6) Verbose mode");
+    println!("  7) All preferences");
+    println!("  0) Exit wizard");
+    println!("");
+
+    loop {
+        print!("Enter choice [0-7]: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+
+        match choice {
+            "0" => break,
+            "1" => configure_commit_style(config)?,
+            "2" => configure_bool_pref(config, "auto_push", "Auto-push after commit")?,
+            "3" => configure_bool_pref(config, "auto_stage_all", "Auto-stage all changes")?,
+            "4" => configure_bool_pref(config, "show_diff", "Show diff by default")?,
+            "5" => configure_bool_pref(config, "skip_confirmation", "Skip confirmation prompts")?,
+            "6" => configure_bool_pref(config, "verbose", "Verbose mode")?,
+            "7" => {
+                configure_commit_style(config)?;
+                configure_bool_pref(config, "auto_push", "Auto-push after commit")?;
+                configure_bool_pref(config, "auto_stage_all", "Auto-stage all changes")?;
+                configure_bool_pref(config, "show_diff", "Show diff by default")?;
+                configure_bool_pref(config, "skip_confirmation", "Skip confirmation prompts")?;
+                configure_bool_pref(config, "verbose", "Verbose mode")?;
+                break;
+            }
+            _ => println!("{}", "Invalid choice".red()),
+        }
+
+        println!("");
+        print!("Configure another option? [0-7, or 0 to exit]: ");
+        io::stdout().flush()?;
+    }
+
+    println!("");
+    println!("{}", "Configuration updated!".green().bold());
+    Ok(())
+}
+
+fn configure_commit_style(config: &mut config::Config) -> Result<()> {
+    println!("");
+    println!("Select default commit style:");
+    println!("  1) Standard - conventional commits format");
+    println!("  2) Detailed - multi-line with bullet points");
+    println!("  3) Short - concise one-liner");
+    println!("  4) No default (ask each time)");
+    print!("Choice [1-4]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    match input.trim() {
+        "1" => {
+            config.default_style = Some("standard".to_string());
+            println!("{}", "✓ Default style set to: standard".green());
+        }
+        "2" => {
+            config.default_style = Some("detailed".to_string());
+            println!("{}", "✓ Default style set to: detailed".green());
+        }
+        "3" => {
+            config.default_style = Some("short".to_string());
+            println!("{}", "✓ Default style set to: short".green());
+        }
+        "4" => {
+            config.default_style = None;
+            println!("{}", "✓ No default style (will prompt each time)".green());
+        }
+        _ => println!("{}", "Invalid choice, keeping current setting".yellow()),
+    }
+
+    Ok(())
+}
+
+fn configure_bool_pref(config: &mut config::Config, key: &str, description: &str) -> Result<()> {
+    println!("");
+    println!("{}: [y/n]", description);
+    print!("Enable? ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim().to_lowercase();
+
+    let value = match input.as_str() {
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => {
+            println!("{}", "Invalid input, keeping current setting".yellow());
+            return Ok(());
+        }
+    };
+
+    config.set_preference(key, value)?;
+    println!("{}", format!("✓ {} {}", description, if value { "enabled" } else { "disabled" }).green());
 
     Ok(())
 }
