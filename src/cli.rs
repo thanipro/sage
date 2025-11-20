@@ -64,9 +64,10 @@ pub struct Cli {
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum CommitStyle {
-    /// Standard conventional commits format
+    /// Conventional commits format (single line)
+    #[value(alias = "conventional")]
     Standard,
-    /// More detailed multi-line commit message
+    /// Detailed multi-line commit message (Git convention)
     Detailed,
     /// Very short one-line commit message
     Short,

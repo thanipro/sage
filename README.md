@@ -10,7 +10,9 @@ sage is a command-line tool that integrates with your Git workflow to automatica
 
 - **Automatic commit message generation** using AI analysis of your git diff
 - **Branch name generation** based on your changes
-- **Multiple commit styles** (standard, detailed, short)
+- **Multiple commit styles** (conventional, detailed, short)
+- **Saved preferences** for workflow customization (auto-push, auto-stage, verbose, etc.)
+- **Interactive configuration wizard** for easy setup
 - **Interactive mode** to review, edit, or abort before committing
 - **Context-aware** generation with optional user-provided context
 - **Multiple AI providers** (OpenAI GPT-4, Claude)
@@ -19,6 +21,7 @@ sage is a command-line tool that integrates with your Git workflow to automatica
 - **Secure input validation** to prevent command injection
 - **Smart diff truncation** for large changesets
 - **One-command workflow** to stage, generate, and commit
+- **Git convention support** for detailed multi-line commits (GitHub-friendly)
 
 ## Requirements
 
@@ -85,17 +88,17 @@ cargo install --path .
 
 ### 1. Configure API Provider
 
-If you used the automated install script, you've already configured your API key. To check or change it:
+If you used the automated install script, you've already configured your API key. Otherwise:
 
 ```bash
-# View current configuration
-sage config -s
+# Use the interactive wizard (recommended)
+sage config --wizard
 
-# Configure or update API key
+# Or configure directly
 sage config -p openai -k your_openai_api_key
 
-# Or for Claude
-sage config -p claude -k your_claude_api_key
+# View current configuration
+sage config -s
 ```
 
 ### 2. Make Changes and Commit
@@ -177,6 +180,11 @@ sage -v
 #### config - Configure API Settings
 
 ```bash
+# Launch interactive wizard (recommended)
+sage config -w
+# or
+sage config --wizard
+
 # Set provider and API key
 sage config -p openai -k your_api_key
 
@@ -191,6 +199,10 @@ sage config --model gpt-4-turbo
 
 # Set max tokens for responses
 sage config --max-tokens 500
+
+# Set preferences
+sage config --set-pref auto-push --value true
+sage config --set-pref verbose --value false
 
 # Show current configuration
 sage config -s
@@ -269,16 +281,18 @@ After generating completions, restart your shell or source the completion file.
 
 Use the `-t` or `--style` flag to control message format, or set a default in preferences:
 
+#### Conventional (Default)
 ```bash
-# Standard conventional commits (default)
+sage -t conventional
+# or
 sage -t standard
 ```
 **Output:** `feat(auth): add user authentication`
 
-Single line following conventional commits format.
+Single line following [Conventional Commits](https://www.conventionalcommits.org/) format.
 
+#### Detailed (Git Convention)
 ```bash
-# Detailed multi-line messages (Git convention)
 sage -t detailed
 ```
 **Output:**
@@ -291,21 +305,27 @@ feat(auth): add user authentication
 - Handle token expiration
 ```
 
-Follows proper Git convention: short summary line (max 50 chars), blank line, then detailed body. GitHub shows the first line in commit lists, full message when clicked.
+Follows proper Git convention: short summary line (max 50 chars), blank line, then detailed body. GitHub shows just the first line in commit lists, but displays the full message when you click on the commit.
 
+#### Short
 ```bash
-# Short one-line messages (max 50 chars)
 sage -t short
 ```
 **Output:** `add user auth`
 
-Ultra-concise for small changes.
+Ultra-concise for small changes (max 50 chars).
 
-**Set a default style:**
+### Set Default Style
+
+Set your preferred style to use automatically:
+
 ```bash
-sage config --wizard  # Select option 1
-# or
-sage config --set-pref default-style --value detailed
+# Using interactive wizard
+sage config --wizard
+# Select: 1) Default commit style
+
+# Or set directly in config file
+# Edit ~/.sage-config.json and add: "default_style": "detailed"
 ```
 
 ## Configuration
@@ -326,9 +346,75 @@ Configuration is stored in `~/.sage-config.json`:
     }
   },
   "max_tokens": 300,
-  "default_style": null
+  "default_style": "detailed",
+  "preferences": {
+    "auto_push": false,
+    "auto_stage_all": true,
+    "show_diff": false,
+    "skip_confirmation": false,
+    "verbose": true
+  }
 }
 ```
+
+### Interactive Configuration Wizard
+
+Use the wizard for easy configuration:
+
+```bash
+sage config --wizard
+```
+
+The wizard provides an interactive menu:
+
+```
+Configuration Wizard
+
+Select what you'd like to configure:
+  1) Default commit style
+  2) Auto-push after commit
+  3) Auto-stage all changes
+  4) Show diff by default
+  5) Skip confirmation prompts
+  6) Verbose mode
+  7) All preferences
+  0) Exit wizard
+```
+
+### Preferences
+
+Preferences are saved settings that apply automatically to every commit:
+
+| Preference | Description | CLI Equivalent |
+|------------|-------------|----------------|
+| `auto_push` | Automatically push after committing | `-p, --push` |
+| `auto_stage_all` | Stage all changes before committing | `-a, --all` |
+| `show_diff` | Show diff before generating message | `-s, --show-diff` |
+| `skip_confirmation` | Skip "Commit with this message?" prompt | `-y, --yes` |
+| `verbose` | Show detailed output with timing and tokens | `-v, --verbose` |
+| `default_style` | Default commit message style | `-t, --style` |
+
+**Set preferences using the wizard:**
+```bash
+sage config --wizard
+```
+
+**Set preferences directly:**
+```bash
+sage config --set-pref auto-push --value true
+sage config --set-pref verbose --value true
+sage config --set-pref auto-stage-all --value false
+```
+
+**View current configuration:**
+```bash
+sage config -s
+```
+
+**How preferences work:**
+- CLI flags always override preferences
+- If a preference is "not set", the default behavior applies
+- Preferences persist across all commits until changed
 
 ### Supported Models
 

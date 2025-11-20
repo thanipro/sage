@@ -461,8 +461,8 @@ fn run_config_wizard(config: &mut config::Config) -> Result<()> {
 fn configure_commit_style(config: &mut config::Config) -> Result<()> {
     println!("");
     println!("Select default commit style:");
-    println!("  1) Standard - conventional commits format");
-    println!("  2) Detailed - multi-line with bullet points");
+    println!("  1) Conventional - single line conventional commits format");
+    println!("  2) Detailed - multi-line with summary + bullet points (Git convention)");
     println!("  3) Short - concise one-liner");
     println!("  4) No default (ask each time)");
     print!("Choice [1-4]: ");
@@ -474,7 +474,7 @@ fn configure_commit_style(config: &mut config::Config) -> Result<()> {
     match input.trim() {
         "1" => {
             config.default_style = Some("standard".to_string());
-            println!("{}", "✓ Default style set to: standard".green());
+            println!("{}", "✓ Default style set to: conventional".green());
         }
         "2" => {
             config.default_style = Some("detailed".to_string());

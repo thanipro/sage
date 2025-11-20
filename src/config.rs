@@ -109,12 +109,13 @@ impl Config {
 
     pub fn set_default_style(&mut self, style: &str) -> Result<()> {
         match style {
-            "standard" | "detailed" | "short" => {
-                self.default_style = Some(style.to_string());
+            "standard" | "conventional" | "detailed" | "short" => {
+                let normalized = if style == "conventional" { "standard" } else { style };
+                self.default_style = Some(normalized.to_string());
                 Ok(())
             }
             _ => Err(SageError::InvalidInput(
-                format!("Invalid style: {}. Use: standard, detailed, or short", style)
+                format!("Invalid style: {}. Use: conventional, detailed, or short", style)
             )),
         }
     }
