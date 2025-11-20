@@ -85,13 +85,16 @@ cargo install --path .
 
 ### 1. Configure API Provider
 
+If you used the automated install script, you've already configured your API key. To check or change it:
+
 ```bash
+# View current configuration
+sage config -s
+
+# Configure or update API key
 sage config -p openai -k your_openai_api_key
-```
 
-Or for Claude:
-
-```bash
+# Or for Claude
 sage config -p claude -k your_claude_api_key
 ```
 
